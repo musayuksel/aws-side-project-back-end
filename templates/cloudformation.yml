@@ -1,0 +1,77 @@
+Resources:
+  ConfigBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: "musa-website-api-test-bucket-123123"
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${ConfigBucket}/*"
+
+  ConfigLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-config-lambda"
+      Runtime: nodejs16.x
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      #  CodeUri: ../src/index.js
+      Code:
+        ZipFile: |
+          const AWS = require('aws-sdk');
+          const s3 = new AWS.S3();
+          const BUCKET_NAME = process.env.BUCKET_NAME;
+
+          exports.handler = async (event) => {
+              const key = event.queryStringParameters?.key || 'default-config.json';
+
+              try {
+                  const data = await s3.getObject({ Bucket: BUCKET_NAME, Key: key }).promise();
+                  return {
+                      statusCode: 200,
+                      body: data.Body.toString('utf-8'),
+                  };
+              } catch (err) {
+                  return {
+                      statusCode: 500,
+                      body: `Error: ${err.message}`,
+                  };
+              }
+          };
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref ConfigBucket # in lambda we can access this variable as process.env.BUCKET_NAME
+
+
+  # CloudFrontDistribution:
+  #   Type: AWS::CloudFront::Distribution
+  #   Properties:
+  #     DistributionConfig:
+  #       Enabled: true
+  #       DefaultCacheBehavior:
+  #         TargetOriginId: lambdaOrigin
+  #         ViewerProtocolPolicy: redirect-to-https
+  #         LambdaFunctionAssociations:
+  #           - EventType: origin-request
+  #             LambdaFunctionARN: !GetAtt ConfigLambda.Arn
+  #       Origins:
+  #         - Id: lambdaOrigin
+  #           DomainName: !GetAtt ConfigBucket.DomainName
+  #           S3OriginConfig: {}
