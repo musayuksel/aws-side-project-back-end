@@ -63,7 +63,7 @@ Resources:
                   - logs:PutLogEvents
                 Resource: "arn:aws:logs:*:*:*"
 
-  ConfigLambda:
+  ConfigUpdateLambda:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub "${AWS::StackName}-config-lambda"
@@ -81,44 +81,45 @@ Resources:
               headers: {
                 'X-Example-Header': 'This is an example header'
               },
-              body: JSON.stringify(fileContent),
+              body: JSON.stringify('Hello from Lambda!'),
             };
 
             return response;
           };
 
-  ConfigLambdaVersion:
+  ConfigUpdateLambdaVersion:
     Type: AWS::Lambda::Version
     Properties:
-      FunctionName: !Ref ConfigLambda
+      FunctionName: !Ref ConfigUpdateLambda
 
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
       DistributionConfig:
+        Comment: "musa-s3-lambda-edge-test-distribution"
         Enabled: true
+        DefaultRootObject: "default-config.json"
         DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
           ForwardedValues:
             QueryString: true
           TargetOriginId: s3Origin
           ViewerProtocolPolicy: redirect-to-https
           LambdaFunctionAssociations:
             - EventType: origin-request
-              LambdaFunctionARN: !Ref ConfigLambdaVersion
+              LambdaFunctionARN: !Ref ConfigUpdateLambdaVersion
         Origins:
           - Id: s3Origin
             DomainName: !GetAtt ConfigBucket.DomainName
+            OriginAccessControlId: !Ref OriginAccessControl
             S3OriginConfig: {}
-        Restrictions:
-          GeoRestriction:
-            RestrictionType: whitelist
-            Locations:
-              - GB
 
 Outputs:
   ConfigLambdaFunction:
     Description: "Config Lambda Function ARN"
-    Value: !Ref ConfigLambdaVersion
+    Value: !Ref ConfigUpdateLambdaVersion
 
   CloudFrontDistributionDomainName:
     Description: "CloudFront Distribution Domain Name"
