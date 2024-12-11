@@ -3,6 +3,7 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: "musa-website-lambda-edge-test-bucket-081224v4"
+
   ConfigBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -72,20 +73,25 @@ Resources:
       Role: !GetAtt LambdaExecutionRole.Arn
       Code:
         ZipFile: |
-          exports.handler = async (event) => {
-            console.log('Received event:', JSON.stringify(event, null, 2));
+          'use strict';
+            export.handler = (event, context, callback) => {
 
-            // Add a custom header to the response
-            const response = {
-              statusCode: 200,
-              headers: {
-                'X-Example-Header': 'This is an example header'
-              },
-              body: JSON.stringify('Hello from Lambda!'),
+                //Get contents of response
+                const response = event.Records[0].cf.response;
+                const headers = response.headers;
+
+                //Set new headers
+                headers['strict-transport-security'] = [{key: 'Strict-Transport-Security', value: 'max-age= 63072000; includeSubdomains; preload'}];
+                headers['content-security-policy'] = [{key: 'Content-Security-Policy', value: "default-src 'none'; img-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'"}];
+                headers['x-content-type-options'] = [{key: 'X-Content-Type-Options', value: 'nosniff'}];
+                headers['x-frame-options'] = [{key: 'X-Frame-Options', value: 'DENY'}];
+                headers['x-xss-protection'] = [{key: 'X-XSS-Protection', value: '1; mode=block'}];
+                headers['referrer-policy'] = [{key: 'Referrer-Policy', value: 'same-origin'}];
+                headers['x-teeeeeest-header'] = [{key: 'X-Teeeeeest-Header', value: 'teeeest-value'}];
+
+                //Return modified response
+                callback(null, response);
             };
-
-            return response;
-          };
 
   ConfigUpdateLambdaVersion:
     Type: AWS::Lambda::Version
@@ -108,7 +114,7 @@ Resources:
           TargetOriginId: s3Origin
           ViewerProtocolPolicy: redirect-to-https
           LambdaFunctionAssociations:
-            - EventType: origin-request
+            - EventType: origin-response
               LambdaFunctionARN: !Ref ConfigUpdateLambdaVersion
         Origins:
           - Id: s3Origin
