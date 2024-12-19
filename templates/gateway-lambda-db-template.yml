@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Backend API with API Gateway, Lambda, and DynamoDB with CORS
+Parameters:
+  TableName:
+    Type: String
+    Description: Name of the DynamoDB table to create
+    Default: lambda-apigateway
+
+Resources:
+  # DynamoDB Table
+  DynamoDBTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      TableName: !Ref TableName
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+        - AttributeName: name
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+        - AttributeName: name
+          KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+        # Lamda Execution Role
+  LambdaExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: lambda-apigateway-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: LambdaDynamoDBPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:DeleteItem"
+                  - "dynamodb:GetItem"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:Query"
+                  - "dynamodb:Scan"
+                  - "dynamodb:UpdateItem"
+                Resource: !GetAtt DynamoDBTable.Arn
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: "arn:aws:logs:*:*:*"
+
+  # Lambda Function
+  LambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      FunctionName: LambdaFunctionOverHttps
+      Runtime: nodejs20.x
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            console.log('event', event);
+            return {
+              statusCode: 200,
+              headers: {
+                "Access-Control-Allow-Credentials": true
+              },
+              body: JSON.stringify({ message: "Hello World" })
+            };
+          }
+
+  # API Gateway Rest API
+  ConfigLambdaPermission:
+    Type: "AWS::Lambda::Permission"
+    DependsOn:
+      - ApiGateway
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref LambdaFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub >-
+        arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/POST/DynamoDBManager
+
+  ApiGatewayExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ""
+            Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: LambdaInvokePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: "lambda:InvokeFunction"
+                Resource: !GetAtt LambdaFunction.Arn
+
+  ApiGateway:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Name: DynamoDBOperations
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+  #API Gateway Resource
+  ApiResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: DynamoDBManager
+  #API Gateway Method(POST) with CORS
+  ApiMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'" # Replace with your domain
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+            ResponseTemplates:
+              application/json: ""
+        Credentials: !GetAtt ApiGatewayExecutionRole.Arn
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: !Sub >-
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+          ResponseModels:
+            application/json: Empty
+  ApiDeployment:
+    Type: "AWS::ApiGateway::Deployment"
+    DependsOn:
+      - ApiMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+  ApiStage:
+    Type: "AWS::ApiGateway::Stage"
+    Properties:
+      RestApiId: !Ref ApiGateway
+      DeploymentId: !Ref ApiDeployment
+      StageName: Prod
+Outputs:
+  ApiEndpoint:
+    Value: !Sub >-
+      https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod/DynamoDBManager
+    Description: Endpoint URL of the deployed API
