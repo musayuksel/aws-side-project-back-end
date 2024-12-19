@@ -68,20 +68,73 @@ Resources:
     Properties:
       FunctionName: LambdaFunctionOverHttps
       Runtime: nodejs20.x
-      Handler: index.lambda_handler
+      Handler: index.lambdaHandler
       Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          ALLOWED_ORIGINS: "http://localhost:5173,https://my-production-domain.com"
       Code:
         ZipFile: |
-          exports.handler = async (event) => {
-            console.log('event', event);
-            return {
-              statusCode: 200,
-              headers: {
-                "Access-Control-Allow-Credentials": true
-              },
-              body: JSON.stringify({ message: "Hello World" })
-            };
-          }
+          exports.lambdaHandler = async (event) => {
+            try {
+              const allowedOrigins = process.env.ALLOWED_ORIGINS.split(",").map(
+                (origin) => origin.toLowerCase()
+              );
+
+              const origin = event.headers.origin?.toLowerCase() || ""; // Handle cases where origin is null/undefined
+
+              if (event.httpMethod === "OPTIONS") {
+                if (allowedOrigins.includes(origin)) {
+                  return {
+                    statusCode: 200,
+                    headers: {
+                      "Access-Control-Allow-Origin": origin,
+                      "Access-Control-Allow-Methods": "OPTIONS,POST",
+                      "Access-Control-Allow-Headers": "Content-Type",
+                    },
+                    body: "", // Empty body for OPTIONS responses is common
+                  };
+                } else {
+                  return {
+                    statusCode: 403,
+                    body: JSON.stringify({ message: "CORS Origin Not Allowed" }),
+                  };
+                }
+              }
+
+              if (event.httpMethod === "POST") {
+                if (allowedOrigins.includes(origin)) {
+                  return {
+                    statusCode: 200,
+                    headers: {
+                      "Access-Control-Allow-Origin": origin,
+                      "Access-Control-Allow-Methods": "OPTIONS,POST",
+                      "Access-Control-Allow-Headers": "Content-Type",
+                    },
+                    body: JSON.stringify({ message: "Hello World" }),
+                  };
+                } else {
+                  return {
+                    statusCode: 403,
+                    body: JSON.stringify({ message: "CORS Origin Not Allowed" }),
+                  };
+                }
+              }
+
+              return {
+                statusCode: 400,
+                body: JSON.stringify({ message: "Invalid Method" }),
+              };
+            } catch (error) {
+              console.error("Error:", error);
+              return {
+                statusCode: 500,
+                body: JSON.stringify({
+                  message: "Internal Server Error, Please Try Again",
+                }),
+              };
+            }
+          };
 
   # API Gateway Rest API
   ConfigLambdaPermission:
@@ -129,8 +182,9 @@ Resources:
       RestApiId: !Ref ApiGateway
       ParentId: !GetAtt ApiGateway.RootResourceId
       PathPart: DynamoDBManager
+
   #API Gateway Method(POST) with CORS
-  ApiMethod:
+  ApiPostMethod:
     Type: "AWS::ApiGateway::Method"
     Properties:
       RestApiId: !Ref ApiGateway
@@ -138,19 +192,9 @@ Resources:
       HttpMethod: POST
       AuthorizationType: NONE
       Integration:
-        IntegrationResponses:
-          - StatusCode: 200
-            ResponseParameters:
-              method.response.header.Access-Control-Allow-Origin: "'*'" # Replace with your domain
-              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
-            ResponseTemplates:
-              application/json: ""
-        Credentials: !GetAtt ApiGatewayExecutionRole.Arn
-        Type: AWS
+        Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub >-
-          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations"
       MethodResponses:
         - StatusCode: 200
           ResponseParameters:
@@ -159,10 +203,31 @@ Resources:
             method.response.header.Access-Control-Allow-Methods: true
           ResponseModels:
             application/json: Empty
+
+  # API Gateway Method (OPTIONS) for CORS Preflight
+  ApiOptionsMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode":200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
   ApiDeployment:
     Type: "AWS::ApiGateway::Deployment"
     DependsOn:
-      - ApiMethod
+      - ApiPostMethod
+      - ApiOptionsMethod
     Properties:
       RestApiId: !Ref ApiGateway
   ApiStage:
