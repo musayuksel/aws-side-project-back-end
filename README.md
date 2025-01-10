@@ -2,7 +2,8 @@
 
 ### Architecture Diagram
 
-<!-- add diagram here -->
+![CloudFront Architecture Diagram](docs/Cloudfront_arch_diagram.png)
+![APIGW Architecture Diagram](docs/APIGW_arch_diagram.png)
 
 ---
 
