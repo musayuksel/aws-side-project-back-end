@@ -5,7 +5,7 @@ Parameters:
   TableName:
     Type: String
     Description: Name of the DynamoDB table to create
-    Default: lambda-apigateway
+    Default: musa-test-lambda-users-table
   CodeBucket:
     Type: String
     Description: S3 bucket name where the Lambda code is stored
@@ -66,19 +66,32 @@ Resources:
                   - "logs:PutLogEvents"
                 Resource: "arn:aws:logs:*:*:*"
 
-  # Lambda Function
-  LambdaFunction:
+  # Lambda Function to create a user
+  CreateUserLambda:
     Type: "AWS::Lambda::Function"
     Properties:
-      FunctionName: LambdaFunctionOverHttps
+      FunctionName: LambdaFunctionCreateUser
       Runtime: nodejs20.x
       Handler: handlers/createUser.handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
         Variables:
-          ALLOWED_ORIGINS: "http://localhost:5173,https://my-production-domain.com"
           TABLE_NAME: !Ref TableName
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
 
+  # Lambda Function to get user
+  GetUserLambda:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      FunctionName: LambdaFunctionGetUser
+      Runtime: nodejs20.x
+      Handler: handlers/getUser.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref TableName
       Code:
         S3Bucket: !Ref CodeBucket
         S3Key: !Ref CodeKey
@@ -90,10 +103,21 @@ Resources:
       - ApiGateway
     Properties:
       Action: "lambda:InvokeFunction"
-      FunctionName: !Ref LambdaFunction
+      FunctionName: !Ref CreateUserLambda
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub >-
-        arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/POST/DynamoDBManager
+        arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/POST/user
+
+  GetLambdaPermission:
+    Type: "AWS::Lambda::Permission"
+    DependsOn:
+      - ApiGateway
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref GetUserLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub >-
+        arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/GET/user
 
   ApiGatewayExecutionRole:
     Type: "AWS::IAM::Role"
@@ -113,7 +137,7 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: "lambda:InvokeFunction"
-                Resource: !GetAtt LambdaFunction.Arn
+                Resource: !GetAtt CreateUserLambda.Arn
 
   ApiGateway:
     Type: "AWS::ApiGateway::RestApi"
@@ -128,7 +152,28 @@ Resources:
     Properties:
       RestApiId: !Ref ApiGateway
       ParentId: !GetAtt ApiGateway.RootResourceId
-      PathPart: DynamoDBManager
+      PathPart: user
+
+  #API Gateway Method(GET) with CORS
+  ApiGetMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetUserLambda.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+          ResponseModels:
+            application/json: Empty
 
   #API Gateway Method(POST) with CORS
   ApiPostMethod:
@@ -141,7 +186,7 @@ Resources:
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateUserLambda.Arn}/invocations"
       MethodResponses:
         - StatusCode: "200"
           ResponseParameters:
@@ -183,6 +228,7 @@ Resources:
     DependsOn:
       - ApiPostMethod
       - ApiOptionsMethod
+      - ApiGetMethod
     Properties:
       RestApiId: !Ref ApiGateway
   ApiStage:
@@ -194,5 +240,5 @@ Resources:
 Outputs:
   ApiEndpoint:
     Value: !Sub >-
-      https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod/DynamoDBManager
+      https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod/user
     Description: Endpoint URL of the deployed API
