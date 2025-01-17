@@ -5,7 +5,7 @@ Parameters:
   TableName:
     Type: String
     Description: Name of the DynamoDB table to create
-    Default: musa-test-lambda-users-table
+    Default: musa-test-lambda-promos-table
   CodeBucket:
     Type: String
     Description: S3 bucket name where the Lambda code is stored
@@ -22,10 +22,10 @@ Resources:
     Properties:
       TableName: !Ref TableName
       AttributeDefinitions:
-        - AttributeName: email
+        - AttributeName: channel
           AttributeType: S
       KeySchema:
-        - AttributeName: email
+        - AttributeName: channel
           KeyType: HASH
       ProvisionedThroughput:
         ReadCapacityUnits: 1
@@ -81,13 +81,13 @@ Resources:
         S3Bucket: !Ref CodeBucket
         S3Key: !Ref CodeKey
 
-  # Lambda Function to get user
-  GetUserLambda:
+  # Lambda Function to get promos
+  GetPromosLambda:
     Type: "AWS::Lambda::Function"
     Properties:
-      FunctionName: LambdaFunctionGetUser
+      FunctionName: LambdaFunctionGetPromos
       Runtime: nodejs20.x
-      Handler: handlers/getUser.handler
+      Handler: handlers/getChannelPromos.handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
         Variables:
@@ -108,16 +108,16 @@ Resources:
       SourceArn: !Sub >-
         arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/POST/user
 
-  GetLambdaPermission:
+  GetPromosLambdaPermission:
     Type: "AWS::Lambda::Permission"
     DependsOn:
       - ApiGateway
     Properties:
       Action: "lambda:InvokeFunction"
-      FunctionName: !Ref GetUserLambda
+      FunctionName: !Ref GetPromosLambda
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub >-
-        arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/GET/user
+        arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/GET/promos
 
   ApiGatewayExecutionRole:
     Type: "AWS::IAM::Role"
@@ -137,12 +137,14 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: "lambda:InvokeFunction"
-                Resource: !GetAtt CreateUserLambda.Arn
+                Resource:
+                  - !GetAtt CreateUserLambda.Arn
+                  - !GetAtt GetPromosLambda.Arn
 
   ApiGateway:
     Type: "AWS::ApiGateway::RestApi"
     Properties:
-      Name: DynamoDBOperations
+      Name: MockTVPromotionAPI
       EndpointConfiguration:
         Types:
           - REGIONAL
@@ -154,18 +156,25 @@ Resources:
       ParentId: !GetAtt ApiGateway.RootResourceId
       PathPart: user
 
-  #API Gateway Method(GET) with CORS
-  ApiGetMethod:
+  ApiResourceForPromos:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: promos
+
+    #API Gateway Method(GET) promos with CORS
+  ApiGetPromosMethod:
     Type: "AWS::ApiGateway::Method"
     Properties:
       RestApiId: !Ref ApiGateway
-      ResourceId: !Ref ApiResource
+      ResourceId: !Ref ApiResourceForPromos
       HttpMethod: GET
       AuthorizationType: NONE
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetUserLambda.Arn}/invocations"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetPromosLambda.Arn}/invocations"
       MethodResponses:
         - StatusCode: "200"
           ResponseParameters:
@@ -228,7 +237,7 @@ Resources:
     DependsOn:
       - ApiPostMethod
       - ApiOptionsMethod
-      - ApiGetMethod
+      - ApiGetPromosMethod
     Properties:
       RestApiId: !Ref ApiGateway
   ApiStage:
@@ -240,5 +249,5 @@ Resources:
 Outputs:
   ApiEndpoint:
     Value: !Sub >-
-      https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod/user
+      https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod/promos
     Description: Endpoint URL of the deployed API
